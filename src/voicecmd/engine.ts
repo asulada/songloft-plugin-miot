@@ -148,21 +148,25 @@ const BUILTIN_STOP_KEYWORDS = ['暂停播放', '停止播放', '暂停音乐', '
  *
  * @returns 最佳候选的 { lastIdx, inserted }，无候选返回 null
  */
-function fuzzySubseqMatch(qRunes: string[], kwRunes: string[], maxGap: number): { lastIdx: number; inserted: number } | null {
+function fuzzySubseqMatch(qRunes: string[], kwRunes: string[], maxGap: number): { lastIdx: number; inserted: number; positions: number[] } | null {
   const kwLen = kwRunes.length;
   if (kwLen < FUZZY_MIN_KEYWORD_LEN) return null;
   if (qRunes.length < kwLen) return null;
 
-  let best: { lastIdx: number; inserted: number } | null = null;
+  let best: { lastIdx: number; inserted: number; positions: number[] } | null = null;
 
   for (let start = 0; start <= qRunes.length - kwLen; start++) {
     if (qRunes[start] !== kwRunes[0]) continue;
 
-    // 从 start 起贪心按序匹配关键词其余字符
+    // 从 start 起贪心按序匹配关键词其余字符，记录每个关键词字符落在 query 的下标
+    const positions = [start];
     let ki = 1;
     let qi = start + 1;
     while (qi < qRunes.length && ki < kwLen) {
-      if (qRunes[qi] === kwRunes[ki]) ki++;
+      if (qRunes[qi] === kwRunes[ki]) {
+        positions.push(qi);
+        ki++;
+      }
       qi++;
     }
     if (ki < kwLen) continue; // 关键词未完整命中
@@ -172,11 +176,29 @@ function fuzzySubseqMatch(qRunes: string[], kwRunes: string[], maxGap: number): 
     if (inserted > maxGap) continue;
 
     if (best === null || inserted < best.inserted) {
-      best = { lastIdx, inserted };
+      best = { lastIdx, inserted, positions };
     }
   }
 
   return best;
+}
+
+/**
+ * 第二趟跳字匹配命中后的 argument 提取。
+ * - 优先级：keyword 尾后还有文本（如「我今天想听周杰伦」），保持原行为，只取尾后文本，避免把时间/语气词当歌名。
+ * - 仅当 keyword 尾后为空（keyword 真被整句口语包住，如「播放儿童歌曲」）才回收 keyword 内被跳过的字符，
+ *   避免把真正的歌名「儿童」当噪音吞掉导致 argument 为空、无法进入搜索/向量。
+ */
+function collectFuzzyArgument(qRunes: string[], m: { lastIdx: number; positions: number[] }): string {
+  const tailAfter = qRunes.slice(m.lastIdx + 1).join('').trim();
+  if (tailAfter !== '') return tailAfter;
+
+  const posSet = new Set(m.positions);
+  const kept: string[] = [];
+  for (let i = m.positions[0]; i <= m.lastIdx; i++) {
+    if (!posSet.has(i)) kept.push(qRunes[i]);
+  }
+  return kept.join('').trim();
 }
 
 // ===== 默认口令配置 =====
@@ -790,7 +812,7 @@ export class VoiceEngine {
           bestMatch = {
             command: item.cmd,
             keyword,
-            argument: qRunes.slice(m.lastIdx + 1).join('').trim(),
+            argument: collectFuzzyArgument(qRunes, m),
           };
         }
       }

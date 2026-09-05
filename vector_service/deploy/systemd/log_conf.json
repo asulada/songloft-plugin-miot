@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "disable_existing_loggers": false,
+  "formatters": {
+    "default": {
+      "()": "uvicorn.logging.DefaultFormatter",
+      "fmt": "%(asctime)s %(levelprefix)s %(name)s: %(message)s",
+      "datefmt": "%Y-%m-%d %H:%M:%S %z",
+      "use_colors": null
+    },
+    "access": {
+      "()": "uvicorn.logging.AccessFormatter",
+      "fmt": "%(asctime)s %(levelprefix)s %(client_addr)s - \"%(request_line)s\" %(status_code)s",
+      "datefmt": "%Y-%m-%d %H:%M:%S %z",
+      "use_colors": null
+    }
+  },
+  "handlers": {
+    "default": {
+      "formatter": "default",
+      "class": "logging.handlers.RotatingFileHandler",
+      "filename": "/run/songloft-vector/error.log",
+      "maxBytes": 10485760,
+      "backupCount": 3,
+      "encoding": "utf8"
+    },
+    "access": {
+      "formatter": "access",
+      "class": "logging.handlers.RotatingFileHandler",
+      "filename": "/run/songloft-vector/access.log",
+      "maxBytes": 10485760,
+      "backupCount": 3,
+      "encoding": "utf8"
+    }
+  },
+  "loggers": {
+    "uvicorn": { "handlers": ["default"], "level": "INFO", "propagate": false },
+    "uvicorn.error": { "level": "INFO" },
+    "uvicorn.access": { "handlers": ["access"], "level": "INFO", "propagate": false }
+  }
+}

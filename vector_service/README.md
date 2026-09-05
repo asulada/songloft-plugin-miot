@@ -30,6 +30,46 @@ uvicorn app:app --host 127.0.0.1 --port 8710
 | `VECTOR_DATA_DIR` | 持久化目录，默认 `./data`（gitignore） |
 | `VECTOR_MODEL` | 模型名，默认 `BAAI/bge-small-zh-v1.5` |
 
+## systemd 部署（Debian 12）
+
+把服务托给 systemd 管理，日志写文件并带时间戳，不写 journald。相关文件在 `deploy/systemd/`：
+
+```
+vector_service/deploy/systemd/
+├── songloft-vector.service          # systemd unit
+└── log_conf.json                    # uvicorn 日志配置（asctime 时间戳 + 落文件）
+```
+
+### 安装
+
+```bash
+sudo cp /mnt/nfts1/py/vector_service/deploy/systemd/songloft-vector.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now songloft-vector
+
+# 状态 + 日志
+sudo systemctl status songloft-vector --no-pager
+tail -f /run/songloft-vector/error.log
+tail -f /run/songloft-vector/access.log
+```
+
+### 行为要点
+
+- **日志路径**：`/run/songloft-vector/{error,access}.log`（RotatingFileHandler，10MB × 3 备份）。
+- **时间戳**：`log_conf.json` 的 formatter 带 `%(asctime)s`，格式 `%Y-%m-%d %H:%M:%S %z`，`access` 与 `error` 均带。
+- **监听**：`--host 0.0.0.0 --port 8710`，保证插件容器可经网关注口访问。
+- **目录生命周期**：`/run` 是 tmpfs，`ExecStartPre=mkdir -p` 只保证目录存在；**不随服务停止清理**，仅当容器/宿主重启（重新挂载 tmpfs）才清空。日志因此是**临时诊断用途**。
+
+| 操作 | `/run/songloft-vector` 日志 |
+|---|---|
+| `systemctl restart songloft-vector` | 保留 |
+| `docker restart <容器>` / `docker stop/start` | 清空（tmpfs 重挂） |
+| 宿主机关机/重启 | 清空 |
+
+### 需要持久化日志？
+
+把 `log_conf.json` 里的 `/run/songloft-vector/…` 改为 `/var/log/songloft-vector/…`，并自行保证目录存在（可新建独立目录并替换 unit 里 `ExecStartPre=/bin/mkdir -p /run/songloft-vector` 为 `mkdir -p /var/log/songloft-vector`），即可在容器重启后保留。
+
 ## API（`/api`，JSON）
 
 | 端点 | 请求 | 返回 |

@@ -1,0 +1,31 @@
+[Unit]
+Description=Songloft Vector Semantic Search (bge-small-zh / faiss)
+Documentation=file:///mnt/nfts1/py/vector_service/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# 确保相对路径（data/ 持久化目录）锚定到服务目录
+WorkingDirectory=/mnt/nfts1/py/vector_service
+
+# 模型下载走镜像（无外网或慢时）
+Environment=HF_ENDPOINT=https://hf-mirror.com
+Environment=PYTHONUNBUFFERED=1
+
+# 日志目录 /run/songloft-vector：不随服务停止清理（tmpfs，仅系统/容器重启才清空）
+ExecStartPre=/bin/mkdir -p /run/songloft-vector
+
+# 用 conda 环境内的 uvicorn；--log-config 让 access/error 日志带 asctime 时间戳
+ExecStart=/root/miniconda3/envs/songloft-vector/bin/uvicorn app:app --host 0.0.0.0 --port 8710 --log-config /mnt/nfts1/py/vector_service/log_conf.json
+
+# SIGTERM 优雅退出（FastAPI 记得持久化 meta）
+KillSignal=SIGTERM
+
+Restart=on-failure
+RestartSec=3
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

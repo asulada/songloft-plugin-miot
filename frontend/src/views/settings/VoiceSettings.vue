@@ -106,6 +106,10 @@ const pollInterval = ref(String(state.config.conversation_poll_interval));
 const maxIndex = ref(String(state.config.max_song_index));
 const maxMemory = ref(String(state.config.voice_memory_max_records));
 const externalSearchTimeout = ref(String(state.config.external_search_timeout));
+const vectorServiceUrl = ref(String(state.config.vector_service_url || ''));
+const vectorServiceToken = ref(String(state.config.vector_service_token || ''));
+const vectorServiceTopK = ref(String(state.config.vector_service_top_k ?? 5));
+const vectorServiceTimeout = ref(String(state.config.vector_service_timeout ?? 3));
 const webhookName = ref('');
 const webhookUrl = ref('');
 const commandInputs = reactive<Record<string, string>>({});
@@ -700,6 +704,16 @@ async function deleteMemoryRecord(id?: string): Promise<void> {
       </div>
       <div class="sub-panel sub-panel-inset"><div class="field-grid"><div class="field"><SlInput v-model="newSourceName" placeholder="新源名称" /></div><div class="field"><SlInput v-model="newSourceUrl" placeholder="接口 URL" /></div></div><SlInput v-model="newSourceToken" type="password" placeholder="Token（可选）" /><div class="field-actions"><SlButton variant="outlined" label="添加搜索源" icon="add" @click="addSource" /><SlButton variant="filled" label="保存全部" icon="save" @click="saveSources" /></div></div>
       <div class="field"><label class="field-label">接口测试</label><div class="inline-fields"><SlInput v-model="sourceTestQuery" placeholder="输入测试关键字" @submit="testSource" /><SlButton variant="outlined" label="测试" @click="testSource" /></div><pre v-if="sourceTestResult" class="result-pre">{{ sourceTestResult }}</pre></div>
+    </div>
+  </SectionCard>
+
+  <SectionCard title="语义向量" icon="search" description="本地未命中时按语义检索歌单与歌曲，得分高的先播（无需 AI，直接查外部向量库）。">
+    <SettingRow title="启用语义向量" :subtitle="state.config.voice_command_enabled ? '本地字面未命中时走向量召回；需先启动外部向量服务' : '需要先开启语音口令'"><SlSwitch :model-value="state.config.vector_service_enabled" :disabled="!state.config.voice_command_enabled" @update:model-value="setSwitch('vector_service_enabled', $event)" /></SettingRow>
+    <div v-if="!state.config.voice_command_enabled" class="dependency-hint"><SlIcon name="warning" :size="18" /><span>需要先开启“语音口令”才能使用语义向量。</span></div>
+    <div class="form-body">
+      <div class="field"><label class="field-label">服务地址</label><SlInput :model-value="vectorServiceUrl" placeholder="http://127.0.0.1:8710" @update:model-value="vectorServiceUrl = $event" @change="saveConfig({ vector_service_url: (vectorServiceUrl || '').trim() })" /></div>
+      <div class="field"><label class="field-label">Token（可选）</label><SlInput :model-value="vectorServiceToken" type="password" placeholder="留空则回落插件 Token" @update:model-value="vectorServiceToken = $event" @change="saveConfig({ vector_service_token: (vectorServiceToken || '').trim() })" /></div>
+      <div class="field-grid"><div class="field"><label class="field-label">召回条数</label><SlInput :model-value="vectorServiceTopK" type="number" placeholder="5" @update:model-value="vectorServiceTopK = $event" @change="saveConfig({ vector_service_top_k: Math.max(1, Math.min(20, Number(vectorServiceTopK) || 5)) })" /></div><div class="field"><label class="field-label">超时（秒）</label><SlInput :model-value="vectorServiceTimeout" type="number" placeholder="3" @update:model-value="vectorServiceTimeout = $event" @change="saveConfig({ vector_service_timeout: Math.max(1, Math.min(60, Number(vectorServiceTimeout) || 3)) })" /></div></div>
     </div>
   </SectionCard>
 

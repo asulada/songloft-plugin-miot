@@ -40,6 +40,11 @@ export interface MiotConfig {
   external_search_timeout: number;
   external_search_no_import: boolean;
   search_priority: 'parallel' | 'local_first' | 'external_first';
+  vector_service_enabled: boolean;
+  vector_service_url: string;
+  vector_service_token: string;
+  vector_service_top_k: number;
+  vector_service_timeout: number;
   extra_music_api_models: string[];
   indicator_light_enabled: boolean;
   interrupt_tts_hint_enabled: boolean;
