@@ -4,6 +4,7 @@
 /// <reference types="@songloft/plugin-sdk" />
 
 import { segmentQuery, toPinyin } from './segmenter';
+import type { VectorSearcher } from '../vector/vector_client';
 
 // ===== 类型定义 =====
 
@@ -438,6 +439,9 @@ function scoreSongTokens(
  */
 export class IndexingManager {
   private configManager: import('../config/manager').ConfigManager | null;
+  private vectorSearcher: VectorSearcher | null;
+  /** 跨 refresh 的曲库指纹：判断「宿主库是否变化」以驱动外部向量库重建（宿主无变更信号） */
+  private libraryFingerprint: string = '';
   private songs: IndexedSong[] = [];
   private playlists: IndexedPlaylist[] = [];
   private playlistSongsCache: Map<number, CachedPlaylistSong[]> = new Map();
@@ -464,8 +468,9 @@ export class IndexingManager {
   /** 加载期间又来了 refresh：跑完后补一轮，把期间的变更捡回来。 */
   private playlistCacheRevalidate: boolean = false;
 
-  constructor(configManager?: import('../config/manager').ConfigManager) {
+  constructor(configManager?: import('../config/manager').ConfigManager, vectorSearcher?: VectorSearcher) {
     this.configManager = configManager ?? null;
+    this.vectorSearcher = vectorSearcher ?? null;
   }
 
   private async buildSongIndex(rawSongs: any[]): Promise<IndexedSong[]> {
@@ -695,6 +700,9 @@ export class IndexingManager {
       this.prunePlaylistCache(newPlaylists);
       this.schedulePlaylistCacheLoad(newPlaylists);
 
+      // 宿主无变更信号：用指纹判断「曲库是否变化」，变化则驱动外部向量库重建（fire-and-forget）
+      this.verifyAndSyncVectorLibrary(newSongs, newPlaylists);
+
       songloft.log.info(`轻量索引构建完成: playlists=${newPlaylists.length} songs=${newSongs.length}, 歌单歌曲缓存后台加载已启动`);
       return { success: true, songCount: newSongs.length, playlistCount: newPlaylists.length };
     } catch (e) {
@@ -707,6 +715,58 @@ export class IndexingManager {
     } finally {
       this.isRefreshing = false;
     }
+  }
+
+  /**
+   * 计算曲库指纹（轻量 FNV-1a，仅供变化比对，非加密）。
+   * 仅用 id+title 参与：足以及时发现增删改，又不至于重算大字段。
+   */
+  private computeLibraryFingerprint(songs: IndexedSong[], playlists: IndexedPlaylist[]): string {
+    const parts: string[] = [];
+    const songTokens = songs
+      .map((s) => `${s.id}:${s.title}`)
+      .sort()
+      .join('|');
+    const plTokens = playlists
+      .map((p) => `${p.id}:${p.name}`)
+      .sort()
+      .join('|');
+    parts.push(songTokens, plTokens);
+    const data = parts.join('#');
+
+    let h1 = 0x811c9dc5;
+    let h2 = 0x01000193;
+    for (let i = 0; i < data.length; i++) {
+      const c = data.charCodeAt(i);
+      h1 = Math.imul(h1 ^ c, 16777619);
+      h2 = Math.imul(h2 ^ c, 16777619);
+    }
+    return (h1 >>> 0).toString(16) + '_' + (h2 >>> 0).toString(16);
+  }
+
+  /**
+   * 比较指纹，宿主曲库变化则触发外部向量库重建。
+   * 非阻塞（fire-and-forget），绝不 await——不阻塞 refresh / 启动路径。
+   * 并发由 VectorSearcher.syncAll 的 syncInFlight 去重。
+   */
+  private verifyAndSyncVectorLibrary(newSongs: IndexedSong[], newPlaylists: IndexedPlaylist[]): void {
+    if (!this.vectorSearcher) return;
+    const fingerprint = this.computeLibraryFingerprint(newSongs, newPlaylists);
+    if (fingerprint === this.libraryFingerprint) {
+      return; // 曲库未变，跳过重建
+    }
+    const isFirst = this.libraryFingerprint === '';
+    this.libraryFingerprint = fingerprint;
+    const lib = {
+      songs: newSongs.map((s) => ({ id: s.id, title: s.title, artist: s.artist, album: s.album })),
+      playlists: newPlaylists.map((p) => ({ id: p.id, name: p.name })),
+    };
+    // 首轮刷新缓一缓再推，避免与启动期其他请求争抢；之后立即推
+    setTimeout(() => {
+      this.vectorSearcher?.syncAll(lib).catch((e) => {
+        songloft.log.warn(`[VectorSearcher] 向量库同步失败: ${String(e)}`);
+      });
+    }, isFirst ? 1000 : 0);
   }
 
   async waitForReady(timeoutMs = 5000): Promise<boolean> {
@@ -1269,6 +1329,16 @@ export class IndexingManager {
     }
 
     this.indexReady = true;
+    // 增量 upsert 到外部向量库（fire-and-forget；若未启用或服务不可达则静默跳过）
+    this.vectorSearcher?.pushEntries([{
+      type: 'song',
+      ref_id: song.id,
+      title,
+      artist,
+      album,
+    }]).catch((e) => {
+      songloft.log.warn(`[VectorSearcher] 增量推送失败: ${String(e)}`);
+    });
     songloft.log.info(`[IndexingManager] 增量索引: 已加入歌曲 id=${song.id} "${title}"${playlistId ? ` playlist=${playlistId}` : ''} (songs=${this.songs.length})`);
   }
 

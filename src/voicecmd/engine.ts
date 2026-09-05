@@ -13,6 +13,7 @@ import { GroupCoordinator } from '../group/coordinator';
 import { URLBuilder } from '../player/url_builder';
 import { AIAnalyzer } from './ai_analyzer';
 import { OnlineSearcher } from './online_searcher';
+import type { VectorSearcher, VectorHit } from '../vector/vector_client';
 import { updateDeviceStatusCache } from '../handlers/playlist';
 import { callHostAPI, getHostAPIBaseUrl } from '../utils/http';
 import { findFavoritesPlaylist } from '../utils/favorites';
@@ -62,7 +63,8 @@ interface PlayedSong {
 type SongSearchCandidate =
   | { source: 'local_index'; loc: SongLocation }
   | { source: 'remote_song'; song: StandaloneSongCandidate }
-  | { source: 'external_search'; song: OnlineSearchResult };
+  | { source: 'external_search'; song: OnlineSearchResult }
+  | { source: 'vector'; hits: VectorHit[] };
 
 /**
  * 并行搜歌竞速里的一个待 settle 任务。
@@ -196,6 +198,7 @@ export class VoiceEngine {
   private playlistManagerMap: PlaylistManagerMap;
   private indexingManager: IndexingManager;
   private aiAnalyzer: AIAnalyzer;
+  private vectorSearcher: VectorSearcher | null;
   private onlineSearcher: OnlineSearcher;
   private memoryService: MemoryService;
   private groupCoordinator?: GroupCoordinator;
@@ -211,6 +214,7 @@ export class VoiceEngine {
     minaService: MinaService,
     playlistManagerMap: PlaylistManagerMap,
     indexingManager: IndexingManager,
+    vectorSearcher?: VectorSearcher,
     aiAnalyzer?: AIAnalyzer,
     memoryService?: MemoryService,
     groupCoordinator?: GroupCoordinator,
@@ -220,6 +224,7 @@ export class VoiceEngine {
     this.minaService = minaService;
     this.playlistManagerMap = playlistManagerMap;
     this.indexingManager = indexingManager;
+    this.vectorSearcher = vectorSearcher ?? null;
     this.aiAnalyzer = aiAnalyzer || new AIAnalyzer();
     this.groupCoordinator = groupCoordinator;
     this.onlineSearcher = new OnlineSearcher(configManager, groupCoordinator);
@@ -344,27 +349,6 @@ export class VoiceEngine {
     }
 
     songloft.log.info(`[VoiceEngine] [Rule] No search match found`);
-
-    // AI 兜底（如果启用）
-    const aiConfig = await this.configManager.getAIConfig();
-    if (aiConfig.enabled) {
-      songloft.log.info(`[VoiceEngine] [AI] Analyzing query="${query}"`);
-      const aiResult = await this.aiAnalyzer.analyze(query, aiConfig);
-      if (aiResult) {
-        songloft.log.info(`[VoiceEngine] [AI] Done: action=${aiResult.action} confidence=${aiResult.confidence} params=${JSON.stringify(aiResult.params)}`);
-        if (aiResult.confidence !== 'low' && aiResult.action !== 'unknown') {
-          songloft.log.info(`[VoiceEngine] [AI] → Executing fallback (high confidence, action=${aiResult.action})`);
-          const playedSong = await this.executeAIResult(aiResult, accountId, msg.device_id);
-          if (memoryEnabled && (aiResult.action === 'play_song' || aiResult.action === 'play_artist') && playedSong) {
-            this.queueMemorySuccess(query, playedSong);
-          }
-          return;
-        }
-        songloft.log.info(`[VoiceEngine] [AI] → No fallback execution (action=${aiResult.action}, confidence=${aiResult.confidence})`);
-      } else {
-        songloft.log.info(`[VoiceEngine] [AI] → No fallback execution (analyze returned null)`);
-      }
-    }
 
     // 任何语音交互都会唤醒音箱并打断 URL 播放。
     // 立即挂起定时器（防止 AI 响应期间触发切歌），等小爱说完后重新推送歌曲 URL。
@@ -1505,6 +1489,16 @@ export class VoiceEngine {
       return { source: 'remote_song', song: standalone };
     }
 
+    // 语义向量召回：本地字面/独立歌 miss 后，直接查外部向量库（取消 AI 后的主路径之一）。
+    // 歌单 + 歌曲混排、得分降序由服务端返回；播放决策见 playTopVectorHits。
+    if (this.vectorSearcher) {
+      const hits = await this.vectorSearcher.search(searchTerm);
+      if (hits.length > 0) {
+        songloft.log.warn(`[VoiceEngine] Semantic recall via vector: ${hits.length} hits top="${hits[0].title}" type=${hits[0].type} score=${hits[0].score}`);
+        return { source: 'vector', hits };
+      }
+    }
+
     return null;
   }
 
@@ -1561,6 +1555,9 @@ export class VoiceEngine {
           artist: candidate.song.artist || '',
         } : null;
       }
+      case 'vector': {
+        return await this.playTopVectorHits(candidate.hits, pm, accountId, deviceId);
+      }
     }
   }
 
@@ -1573,6 +1570,104 @@ export class VoiceEngine {
       playlistName: loc.playlistName,
       songIndex: loc.songIndex,
     };
+  }
+
+  /**
+   * 播放语义向量召回结果：歌单、歌曲都能播，得分高的先播（hits 已得分降序）。
+   *
+   * - 首个 hit 是歌单 → 整套歌单播放（一整套即多首，覆盖"歌单、歌曲都能播放"）。
+   * - 首个 hit 是歌曲 → getById 取实歌，null（#420 宿主 ID 过期）或 url 缺失 → 取下一条命中重试。
+   * - 全部失败 → 返回 null，落 findExternalSongCandidate 外搜兜底（零新增）。
+   *
+   * 纪律：不反查本地索引（findSongByName / findPlaylistById 都不碰），歌单 ID 直接用向量
+   * 记录的 ref_id，过期场景由播放失败/降级外搜兜底，与本仓库 pre-existing 限制一致。
+   */
+  private async playTopVectorHits(
+    hits: VectorHit[],
+    pm: PlaylistManager,
+    accountId: string,
+    deviceId: string,
+  ): Promise<PlayedSong | null> {
+    const sorted = [...hits].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+    const first = sorted[0];
+    if (!first) return null;
+
+    songloft.log.warn(`[VoiceEngine] Semantic recall: play type=${first.type} ref_id=${first.refId} score=${first.score}`);
+
+    // 歌单命中：整套歌单播放。
+    if (first.type === 'playlist') {
+      const ok = await this.playVectorPlaylist(first.refId, first.title, pm, accountId, deviceId);
+      return ok ? { songName: first.title, artist: '', playlistId: first.refId, playlistName: first.title } : null;
+    }
+
+    // 歌曲命中：取实歌，过期/无 url → 取下一条命中重试。
+    for (const hit of sorted) {
+      if (hit.type !== 'song') continue;
+      let song: any;
+      try {
+        song = await songloft.songs.getById(hit.refId);
+      } catch {
+        song = null;
+      }
+      if (!song || !song.url) {
+        songloft.log.warn(`[VoiceEngine] Semantic recall stale/miss song id=${hit.refId}, try next hit`);
+        continue;
+      }
+      // 展开完整 song：type / duration 要留着，否则电台转码判定与自动切歌定时器都会失效（#62）。
+      const standalone = {
+        ...(song as any),
+        id: song.id,
+        url: song.url,
+        title: song.title || hit.title,
+        artist: song.artist || hit.artist || '',
+      };
+      const ok = await pm.playWithSongs([standalone as any], 0, 'order', `单曲: ${standalone.title}`, '');
+      if (!ok) {
+        songloft.log.warn(`[VoiceEngine] Semantic recall play failed song id=${hit.refId}, try next hit`);
+        continue;
+      }
+      songloft.log.warn(`[VoiceEngine] Semantic recall played song id=${hit.refId} title="${standalone.title}"`);
+      return { songId: standalone.id, songName: standalone.title, artist: standalone.artist };
+    }
+
+    return null;
+  }
+
+  /**
+   * 直接按向量记录的 ref_id 播放语义召回的歌单（不反查本地索引）。
+   * 与 executePlayPlaylist 的差别：不按名字模糊匹配、不做刷新与重试，命中即播，失败即返回。
+   */
+  private async playVectorPlaylist(
+    refId: number,
+    name: string,
+    pm: PlaylistManager,
+    accountId: string,
+    deviceId: string,
+  ): Promise<boolean> {
+    this.cancelPendingResume();
+    pm.prepareForNewPlayback();
+
+    try {
+      await this.minaService.stopPlay(accountId, deviceId);
+    } catch (e) {
+      songloft.log.warn('[VoiceEngine] Failed to interrupt broadcast for vector playlist: ' + String(e));
+    }
+
+    let playMode: PlayMode = 'order';
+    const devices = await this.configManager.getDevices(accountId);
+    const devCfg = devices.find(d => d.device_id === deviceId);
+    if (devCfg && devCfg.play_mode) {
+      playMode = devCfg.play_mode as PlayMode;
+    }
+
+    pm.setAnnounceOnSongChange(true);
+    const ok = await pm.play(refId, 0, playMode);
+    if (!ok) {
+      songloft.log.warn(`[VoiceEngine] Semantic recall play playlist failed id=${refId}`);
+      return false;
+    }
+    songloft.log.info(`[VoiceEngine] Semantic recall played playlist id=${refId} name="${name}"`);
+    return true;
   }
 
   /**

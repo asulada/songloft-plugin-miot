@@ -155,6 +155,11 @@ export interface PluginConfig {
   external_search_timeout: number;     // 外部搜索超时（秒），默认 6
   external_search_no_import: boolean;   // 不入库直接播放：命中直链型结果时直接把原始 URL 推给音箱，不写入曲库（临时链接友好）
   search_priority: SearchPriority;     // 搜歌优先级策略
+  vector_service_enabled: boolean;    // 语义向量检索：总开关（同时控制推送与召回）
+  vector_service_url: string;         // 外部向量服务完整 http(s) URL（绝无 loopback fallback）
+  vector_service_token: string;       // 可选 Bearer token，空则回落插件 token
+  vector_service_top_k: number;       // /search 的 top_k，默认 5，clamp [1,20]
+  vector_service_timeout: number;     // 超时（秒），默认 3，clamp [1,60]
   extra_music_api_models?: string[];
   indicator_light_enabled?: boolean;
   default_cover_id?: string;

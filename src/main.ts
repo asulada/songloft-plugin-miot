@@ -13,6 +13,7 @@ import { VoiceEngine } from './voicecmd/engine';
 import { AIAnalyzer } from './voicecmd/ai_analyzer';
 import { getDefaultVoiceCommands } from './voicecmd/engine';
 import { IndexingManager } from './indexing/manager';
+import { VectorSearcher } from './vector/vector_client';
 import { MemoryService } from './memory';
 
 // 导入所有handler注册函数
@@ -73,6 +74,7 @@ let scheduler: Scheduler;
 let conversationMonitor: ConversationMonitor;
 let voiceEngine: VoiceEngine;
 let indexingManager: IndexingManager;
+let vectorSearcher: VectorSearcher;
 let memoryService: MemoryService;
 
 async function onInit(): Promise<void> {
@@ -83,7 +85,10 @@ async function onInit(): Promise<void> {
   accountManager = new AccountManager(configManager);
   await accountManager.init();
 
-  indexingManager = new IndexingManager(configManager);
+  // 语义向量检索客户端：启动后由 IndexingManager 指纹驱动建库，语音搜歌 miss 时召回。
+  vectorSearcher = new VectorSearcher(configManager);
+
+  indexingManager = new IndexingManager(configManager, vectorSearcher);
   authService = new AuthService(configManager, accountManager);
   minaService = new MinaService(accountManager, configManager);
   playlistManagerMap = new PlaylistManagerMap(minaService, configManager);
@@ -109,7 +114,7 @@ async function onInit(): Promise<void> {
   conversationMonitor = new ConversationMonitor(accountManager, configManager);
   // 注入对话推送依赖（WebSocket 订阅端点 /conversation/ws 使用）
   initConversationStream(conversationMonitor);
-  voiceEngine = new VoiceEngine(configManager, accountManager, minaService, playlistManagerMap, indexingManager, new AIAnalyzer(), memoryService, groupCoordinator);
+  voiceEngine = new VoiceEngine(configManager, accountManager, minaService, playlistManagerMap, indexingManager, vectorSearcher, new AIAnalyzer(), memoryService, groupCoordinator);
 
   const executor = new TaskExecutor(configManager, accountManager, minaService, playlistManagerMap, indexingManager, conversationMonitor, groupCoordinator);
   scheduler = new Scheduler(configManager, executor);

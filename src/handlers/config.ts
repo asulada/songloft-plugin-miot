@@ -103,6 +103,11 @@ export function registerConfigHandlers(
           external_search_timeout: config.external_search_timeout ?? 6,
           external_search_no_import: !!config.external_search_no_import,
           search_priority: normalizeSearchPriority(config.search_priority),
+          vector_service_enabled: !!config.vector_service_enabled,
+          vector_service_url: config.vector_service_url || '',
+          vector_service_token: config.vector_service_token || '',
+          vector_service_top_k: config.vector_service_top_k ?? 5,
+          vector_service_timeout: config.vector_service_timeout ?? 3,
           extra_music_api_models: config.extra_music_api_models || [],
           indicator_light_enabled: !!config.indicator_light_enabled,
           interrupt_tts_hint_enabled: !!config.interrupt_tts_hint_enabled,
@@ -251,6 +256,23 @@ export function registerConfigHandlers(
       // 更新 search_priority
       if (body.search_priority !== undefined) {
         config.search_priority = normalizeSearchPriority(body.search_priority);
+      }
+
+      // 更新外部向量语义检索配置
+      if (body.vector_service_enabled !== undefined) {
+        config.vector_service_enabled = !!body.vector_service_enabled;
+      }
+      if (body.vector_service_url !== undefined) {
+        config.vector_service_url = typeof body.vector_service_url === 'string' ? body.vector_service_url.trim() : '';
+      }
+      if (body.vector_service_token !== undefined) {
+        config.vector_service_token = typeof body.vector_service_token === 'string' ? body.vector_service_token.trim() : '';
+      }
+      if (body.vector_service_top_k !== undefined) {
+        config.vector_service_top_k = Math.max(1, Math.min(20, Number(body.vector_service_top_k) || 5));
+      }
+      if (body.vector_service_timeout !== undefined) {
+        config.vector_service_timeout = Math.max(1, Math.min(60, Number(body.vector_service_timeout) || 3));
       }
 
       // 更新 indicator_light_enabled

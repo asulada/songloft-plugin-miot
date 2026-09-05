@@ -60,6 +60,11 @@ function defaultPluginConfig(): PluginConfig {
     external_search_timeout: 6,
     external_search_no_import: false,
     search_priority: 'parallel',
+    vector_service_enabled: false,
+    vector_service_url: '',
+    vector_service_token: '',
+    vector_service_top_k: 5,
+    vector_service_timeout: 3,
     indicator_light_enabled: true,
     default_cover_id: '1732418460076477549',
     touchscreen_lyrics_enabled: false,
@@ -143,6 +148,9 @@ export class ConfigManager {
     const merged = { ...defaultPluginConfig(), ...stored };
     merged.voice_memory_enabled = stored.voice_memory_enabled !== false;
     merged.voice_memory_max_records = normalizeMemoryMaxRecords(stored.voice_memory_max_records);
+    // clamp 语义向量检索数值字段（旧配置/脏值兜底）
+    merged.vector_service_top_k = Math.max(1, Math.min(20, Number(merged.vector_service_top_k ?? 5) || 5));
+    merged.vector_service_timeout = Math.max(1, Math.min(60, Number(merged.vector_service_timeout ?? 3) || 3));
     // 惰性迁移：把旧单值外部搜索源归一化为源列表（不写盘，每次读计算）
     merged.external_search_sources = this.normalizeSearchSources(merged);
     return merged;
