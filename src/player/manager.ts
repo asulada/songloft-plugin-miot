@@ -1096,7 +1096,11 @@ export class PlaylistManager {
       }
       case 'auto':
       default: {
-        const estimatedMs = Math.ceil(text.length / 4) * 1000 + 1000;
+        // 中文按字估（≈0.25s/字），英文/数字/符号按词估（≈0.33s/词），再留固定缓冲。
+        // 旧实现用 text.length 把所有英文字母都按中文字计，英文长歌名会被严重高估。
+        const cn = (text.match(/[\u4e00-\u9fa5]/g) || []).length;
+        const en = (text.match(/[a-zA-Z0-9]+/g) || []).length;
+        const estimatedMs = cn * 250 + en * 333 + 1000;
         await new Promise(r => setTimeout(r, estimatedMs));
         break;
       }
@@ -1119,6 +1123,9 @@ export class PlaylistManager {
     if (!opts?.skipAnnouncement) {
       const scope = (await this.configManager.getConfig()).play_announcement_scope || 'voice';
       if (scope === 'all' || this.announceOnSongChange) {
+        // 先静音当前正在播的旧歌，再播报提示语：避免播报/等待期间旧歌继续响（"重复/听到旧歌"）。
+        // 播放 URL 前才真正切到新歌（playURL 内部会再做 pause+play）。
+        await this.forEachTarget('pauseBeforeAnnounce', t => this.minaService.pausePlay(t.account_id, t.device_id));
         await this.announceCurrentSong(song);
       }
     }
@@ -1157,6 +1164,7 @@ export class PlaylistManager {
     // 下发到所有目标设备（分组时为组内全部音箱；传结构化歌曲信息供触屏歌词模式匹配曲库）。
     // 至少一台成功即视为成功；个别成员离线/失败不影响整组继续（自动切歌定时器仍以本机时长驱动）。
     const ok = await this.forEachTarget('playURL', t => this.minaService.playURL(t.account_id, t.device_id, songURL, {
+      id: song.id,
       title: song.title,
       artist: song.artist,
     }));

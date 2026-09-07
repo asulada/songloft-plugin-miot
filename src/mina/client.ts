@@ -35,6 +35,8 @@ const PAUSE_VERIFY_DELAY_MS = 700;
 export interface PlayMetadata {
   title: string;
   artist?: string;
+  /** 歌曲 ID（可选）。试点：用于为普通播放路径生成不重复的 audio_id，验证固定 id 导致的切歌重复 */
+  id?: number;
 }
 
 /**
@@ -141,6 +143,11 @@ export class MinaHTTPClient {
   async playByUrl(deviceId: string, url: string, hardware = '', extraModels?: string[], keepLight = false, customAudioId?: string, lyricsMode?: { enabled: boolean; songName?: string; metadata?: PlayMetadata }): Promise<boolean> {
     const useMusicAPI = hardware ? needUsePlayMusicAPI(hardware, extraModels) : false;
     if (useMusicAPI) {
+      // 试点：未显式配置 default_cover_id 时，用歌曲 id 生成不重复的 audio_id，
+      // 避免所有歌曲共用固定 DEFAULT_MUSIC_AUDIO_ID 导致音箱误判"同上下文续播"而重复上一首开头。
+      const meta = typeof lyricsMode?.metadata === 'object' ? lyricsMode.metadata : undefined;
+      const songBasedId = meta?.id ? String(meta.id) : undefined;
+      // 触屏歌词兜底仍尊重显式 default_cover_id；普通播放单独用 songBasedId 优先（见下方 L173）。
       const fallbackAudioId = customAudioId || DEFAULT_MUSIC_AUDIO_ID;
       if (lyricsMode?.enabled) {
         const audioId = await this.searchAudioId(lyricsMode.metadata || lyricsMode.songName || '', fallbackAudioId);
@@ -170,7 +177,7 @@ export class MinaHTTPClient {
         return this.playURL(deviceId, url, keepLight);
       }
 
-      return this.playByMusicURL(deviceId, url, keepLight, fallbackAudioId, 'play-music');
+      return this.playByMusicURL(deviceId, url, keepLight, songBasedId || fallbackAudioId, 'play-music');
     }
     return this.playURL(deviceId, url, keepLight);
   }

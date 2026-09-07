@@ -66,7 +66,7 @@ function defaultPluginConfig(): PluginConfig {
     vector_service_top_k: 5,
     vector_service_timeout: 3,
     indicator_light_enabled: true,
-    default_cover_id: '1732418460076477549',
+    default_cover_id: '',
     touchscreen_lyrics_enabled: false,
     interrupt_tts_hint_enabled: false,
     interrupt_tts_hint_text: '正在搜索，请稍候',
