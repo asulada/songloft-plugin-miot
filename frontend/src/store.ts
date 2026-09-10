@@ -318,6 +318,19 @@ export async function toggleManaged(accountId: string, selectedDeviceId: string,
   notify(managed ? '已启用设备管理' : '已停用设备管理', 'success');
 }
 
+/** 更新设备持久化播放模式，影响该设备的所有播放路径（本地 / 向量歌单命中 / 定时任务） */
+export async function setDevicePlayMode(accountId: string, selectedDeviceId: string, playMode: PlayMode) {
+  await post('/mina/device/play_mode', {
+    account_id: accountId,
+    device_id: selectedDeviceId,
+    play_mode: playMode,
+  });
+  const account = state.devices.find((item) => item.account_id === accountId);
+  const device = account?.devices.find((item) => deviceId(item) === selectedDeviceId);
+  if (device) device.play_mode = playMode;
+  notify('设备播放模式已保存', 'success');
+}
+
 export async function loadPlaylists(): Promise<void> {
   state.playlists = (await get<Playlist[]>('/playlists')) || [];
   if (

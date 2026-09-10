@@ -103,6 +103,7 @@ export interface Device {
   managed?: boolean;
   online?: boolean;
   presence?: string;
+  play_mode?: PlayMode;
   deviceID?: string;
 }
 

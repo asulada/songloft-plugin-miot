@@ -1622,9 +1622,30 @@ export class VoiceEngine {
       return ok ? { songName: first.title, artist: '', playlistId: first.refId, playlistName: first.title } : null;
     }
 
-    // 歌曲命中：取实歌，过期/无 url → 取下一条命中重试。
+    // 歌曲命中：优先反查归属歌单、从命中曲定位续播（与本地 findSongByName 路径一致）；
+    // 反查不到（独立歌/缓存未就绪/已过期）则降级为单曲播放，失败取下一条命中重试。
     for (const hit of sorted) {
       if (hit.type !== 'song') continue;
+
+      const loc = await this.indexingManager.findSongLocationById(hit.refId);
+      if (loc) {
+        // 强制乱序（forceRandom）：从该曲开始、整个歌单随机播放。
+        const playedLoc = await this.playIndexedSong(loc, pm, hit.title, hit.title, accountId, deviceId, true);
+        if (playedLoc) {
+          songloft.log.warn(`[VoiceEngine] Semantic recall played via playlist id=${hit.refId} title="${playedLoc.songTitle}"`);
+          return {
+            songId: playedLoc.songId,
+            songName: playedLoc.songTitle,
+            artist: playedLoc.artist,
+            playlistId: playedLoc.playlistId,
+            playlistName: playedLoc.playlistName,
+          };
+        }
+        // playIndexedSong 内部已对 #420 做过刷新重试，到这里即为失败，继续尝试下一条命中。
+        songloft.log.warn(`[VoiceEngine] Semantic recall playlist-locate failed id=${hit.refId}, try next hit`);
+        continue;
+      }
+
       let song: any;
       try {
         song = await songloft.songs.getById(hit.refId);
@@ -1726,15 +1747,18 @@ export class VoiceEngine {
     requestedSongName: string,
     accountId: string,
     deviceId: string,
+    forceRandom?: boolean,
   ): Promise<SongLocation | null> {
     songloft.log.info(`[VoiceEngine] Matched song: ${loc.songTitle} - ${loc.artist} playlist="${loc.playlistName}" playlistId=${loc.playlistId} songIndex=${loc.songIndex}`);
 
-    // 获取设备配置中的播放模式
-    let playMode: PlayMode = 'order';
-    const devices = await this.configManager.getDevices(accountId);
-    const devCfg = devices.find(d => d.device_id === deviceId);
-    if (devCfg && devCfg.play_mode) {
-      playMode = devCfg.play_mode as PlayMode;
+    // 获取设备配置中的播放模式；向量歌曲命中强制乱序（forceRandom）时忽略设备配置。
+    let playMode: PlayMode = forceRandom ? 'random' : 'order';
+    if (!forceRandom) {
+      const devices = await this.configManager.getDevices(accountId);
+      const devCfg = devices.find(d => d.device_id === deviceId);
+      if (devCfg && devCfg.play_mode) {
+        playMode = devCfg.play_mode as PlayMode;
+      }
     }
 
     // 按 songId 定位播放：songIndex 来自缓存快照，歌单增删歌曲后会错位（#420）；

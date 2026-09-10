@@ -31,6 +31,7 @@ function parseBody(req: HTTPRequest): any {
  * POST /mina/resume          → 恢复播放
  * POST /mina/stop            → 停止播放
  * POST /mina/device/managed  → 更新管理状态
+ * POST /mina/device/play_mode → 更新设备播放模式
  * POST /mina/last_selection  → 记录最后选中设备
  */
 export function registerDeviceHandlers(
@@ -244,6 +245,37 @@ export function registerDeviceHandlers(
       return jsonResponse({
         success: true,
         data: { message: 'device managed status updated', account_id, device_id, managed: !!managed },
+      });
+    } catch (e: any) {
+      return jsonResponse({ success: false, error: e.message || String(e) });
+    }
+  });
+
+  // POST /mina/device/play_mode - 更新设备播放模式
+  router.post('/mina/device/play_mode', async (req: HTTPRequest) => {
+    try {
+      const body = parseBody(req);
+      const { account_id, device_id, play_mode } = body;
+      if (!account_id) {
+        return jsonResponse({ success: false, error: 'account_id is required' });
+      }
+      if (!device_id) {
+        return jsonResponse({ success: false, error: 'device_id is required' });
+      }
+      if (!play_mode) {
+        return jsonResponse({ success: false, error: 'play_mode is required' });
+      }
+      const allowed = ['order', 'random', 'single', 'singlePlay', 'loop'];
+      if (!allowed.includes(play_mode)) {
+        return jsonResponse({ success: false, error: `play_mode must be one of ${allowed.join(', ')}` });
+      }
+      const ok = await minaService.updatePlayMode(account_id, device_id, play_mode);
+      if (!ok) {
+        return jsonResponse({ success: false, error: 'failed to update play mode' });
+      }
+      return jsonResponse({
+        success: true,
+        data: { message: 'device play mode updated', account_id, device_id, play_mode },
       });
     } catch (e: any) {
       return jsonResponse({ success: false, error: e.message || String(e) });

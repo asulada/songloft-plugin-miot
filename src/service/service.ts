@@ -334,6 +334,24 @@ export class MinaService {
   }
 
   /**
+   * 更新设备持久化播放模式
+   * 影响该设备的所有播放路径（本地搜索、向量歌单命中、定时任务等）
+   */
+  async updatePlayMode(accountId: string, deviceId: string, playMode: string): Promise<boolean> {
+    if (!accountId || !deviceId || !playMode) {
+      songloft.log.warn('[MinaService] updatePlayMode: accountId/deviceId/playMode cannot be empty');
+      return false;
+    }
+    try {
+      await this.accountManager.updateDeviceConfig(accountId, deviceId, { play_mode: playMode });
+      return true;
+    } catch (e) {
+      songloft.log.error('[MinaService] updatePlayMode failed: ' + String(e));
+      return false;
+    }
+  }
+
+  /**
    * 记录最后选中的设备
    * 更新 accountManager.setLastSelectedDevice 和 deviceConfig.last_selected_at
    */

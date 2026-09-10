@@ -9,8 +9,8 @@ import SlSelect from '../../ui/SlSelect.vue';
 import SlSwitch from '../../ui/SlSwitch.vue';
 import { postEnvelope } from '../../api';
 import { navigation } from '../../runtime';
-import { deviceId, deviceName, confirmAction, deleteGroup, loadAccountsAndDevices, loadGroups, messageOf, saveConfig, saveGroup, state, toggleManaged, notify } from '../../store';
-import type { DeviceGroup, DeviceMember, SelectOption } from '../../types';
+import { deviceId, deviceName, confirmAction, deleteGroup, loadAccountsAndDevices, loadGroups, messageOf, saveConfig, saveGroup, setDevicePlayMode, state, toggleManaged, notify } from '../../store';
+import type { DeviceGroup, DeviceMember, PlayMode, SelectOption } from '../../types';
 
 const authTab = ref<'qrcode' | 'password' | 'token'>('qrcode');
 const serverChoice = ref(state.config.server_host || '');
@@ -43,6 +43,20 @@ const hostOptions = computed<SelectOption[]>(() => [
 const isCustomHost = computed(() => serverChoice.value === '__custom__');
 const managed = computed(() => state.devices.flatMap((account) => account.devices.filter((device) => device.managed).map((device) => ({ accountId: account.account_id, device }))));
 const accountStatuses = computed(() => state.accounts);
+const playModeOptions: SelectOption[] = [
+  { value: 'order', label: '顺序' },
+  { value: 'random', label: '随机' },
+  { value: 'single', label: '单曲循环' },
+  { value: 'singlePlay', label: '单曲' },
+  { value: 'loop', label: '列表循环' },
+];
+async function saveDevicePlayMode(accountId: string, selectedDeviceId: string, playMode: string) {
+  try {
+    await setDevicePlayMode(accountId, selectedDeviceId, playMode as PlayMode);
+  } catch (error) {
+    notify(messageOf(error), 'error');
+  }
+}
 
 onMounted(() => {
   const suggested = Array.isArray(state.config.suggested_addresses) ? state.config.suggested_addresses : [];
@@ -164,7 +178,7 @@ async function saveModels() { const values = extraModels.value.split(',').map((i
   </SectionCard>
 
   <SectionCard title="设备管理" icon="speaker_group" description="开启管理后，设备才会出现在播放选择器、分组和定时任务中。">
-    <div class="form-body"><div v-if="!state.devices.length" class="empty-state">暂无设备，请先登录账号并刷新。</div><div v-for="account in state.devices" :key="account.account_id" class="device-account"><h3 class="card-title">{{ account.account_name || account.account_id }}</h3><div v-for="device in account.devices" :key="deviceId(device)" class="device-check-row"><SlCheckbox :model-value="!!device.managed" :aria-label="`管理 ${deviceName(device)}`" @update:model-value="setManaged(account.account_id, deviceId(device), $event)" /><div class="device-check-copy"><strong>{{ deviceName(device) }}</strong><small>{{ device.model || device.hardware || '未知型号' }} · {{ device.presence === 'online' ? '在线' : '离线' }}</small></div><span class="chip" :class="device.presence === 'online' ? 'chip-success' : 'chip-warning'">{{ device.presence === 'online' ? '在线' : '离线' }}</span></div></div></div>
+    <div class="form-body"><div v-if="!state.devices.length" class="empty-state">暂无设备，请先登录账号并刷新。</div><div v-for="account in state.devices" :key="account.account_id" class="device-account"><h3 class="card-title">{{ account.account_name || account.account_id }}</h3><div v-for="device in account.devices" :key="deviceId(device)" class="device-check-row"><SlCheckbox :model-value="!!device.managed" :aria-label="`管理 ${deviceName(device)}`" @update:model-value="setManaged(account.account_id, deviceId(device), $event)" /><div class="device-check-copy"><strong>{{ deviceName(device) }}</strong><small>{{ device.model || device.hardware || '未知型号' }} · {{ device.presence === 'online' ? '在线' : '离线' }}</small></div><SlSelect :model-value="(device.play_mode as string) || 'order'" :options="playModeOptions" aria-label="播放模式" @update:model-value="saveDevicePlayMode(account.account_id, deviceId(device), $event)" /><span class="chip" :class="device.presence === 'online' ? 'chip-success' : 'chip-warning'">{{ device.presence === 'online' ? '在线' : '离线' }}</span></div></div></div>
   </SectionCard>
 
   <SectionCard title="设备分组" icon="speaker_group" description="组内设备共享队列、播放模式和控制操作；一台设备只能属于一个组。">

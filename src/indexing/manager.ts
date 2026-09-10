@@ -1183,6 +1183,35 @@ export class IndexingManager {
   }
 
   /**
+   * 按 songId 精确反查该歌曲所在的歌单与位置（用于向量语义召回歌曲命中时，
+   * 复刻本地「从命中曲定位进歌单续播」的行为）。
+   * 只依赖 playlistSongsCache；缓存未就绪时等一轮才给答复，避免把「查不到位置」误判成「不在任何歌单」。
+   * 同一首歌可能出现在多个歌单，取第一个命中的位置。
+   */
+  async findSongLocationById(songId: number): Promise<SongLocation | null> {
+    if (!this.indexReady || !songId) return null;
+    await this.waitForPlaylistCache();
+
+    for (const pl of this.playlists) {
+      const plSongs = this.playlistSongsCache.get(pl.id) ?? [];
+      for (let idx = 0; idx < plSongs.length; idx++) {
+        const s = plSongs[idx];
+        if (s.id === songId) {
+          return {
+            songId: s.id,
+            playlistId: pl.id,
+            playlistName: pl.name,
+            songIndex: idx,
+            songTitle: s.title,
+            artist: s.artist,
+          };
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
    * 按歌手名称模糊匹配，返回所有歌单中该歌手的歌曲位置列表。
    * 跨歌单去重（同一首歌只返回一次），用于"播放歌手XX的歌"语音口令。
    */
