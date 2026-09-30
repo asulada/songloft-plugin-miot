@@ -1186,29 +1186,33 @@ export class IndexingManager {
    * 按 songId 精确反查该歌曲所在的歌单与位置（用于向量语义召回歌曲命中时，
    * 复刻本地「从命中曲定位进歌单续播」的行为）。
    * 只依赖 playlistSongsCache；缓存未就绪时等一轮才给答复，避免把「查不到位置」误判成「不在任何歌单」。
-   * 同一首歌可能出现在多个歌单，取第一个命中的位置。
+   * 同一首歌可能跨多个歌单，返回所有包含该歌曲的歌单，最多限制 5 个。
    */
-  async findSongLocationById(songId: number): Promise<SongLocation | null> {
-    if (!this.indexReady || !songId) return null;
+  async findSongLocationById(songId: number): Promise<SongLocation[]> {
+    if (!this.indexReady || !songId) return [];
     await this.waitForPlaylistCache();
 
+    const MAX_LOCATIONS = 5;
+    const locations: SongLocation[] = [];
     for (const pl of this.playlists) {
+      if (locations.length >= MAX_LOCATIONS) break;
       const plSongs = this.playlistSongsCache.get(pl.id) ?? [];
       for (let idx = 0; idx < plSongs.length; idx++) {
         const s = plSongs[idx];
         if (s.id === songId) {
-          return {
+          locations.push({
             songId: s.id,
             playlistId: pl.id,
             playlistName: pl.name,
             songIndex: idx,
             songTitle: s.title,
             artist: s.artist,
-          };
+          });
+          break;
         }
       }
     }
-    return null;
+    return locations;
   }
 
   /**

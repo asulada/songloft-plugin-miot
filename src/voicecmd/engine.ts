@@ -1627,23 +1627,22 @@ export class VoiceEngine {
     for (const hit of sorted) {
       if (hit.type !== 'song') continue;
 
-      const loc = await this.indexingManager.findSongLocationById(hit.refId);
-      if (loc) {
-        // 强制乱序（forceRandom）：从该曲开始、整个歌单随机播放。
-        const playedLoc = await this.playIndexedSong(loc, pm, hit.title, hit.title, accountId, deviceId, true);
-        if (playedLoc) {
-          songloft.log.warn(`[VoiceEngine] Semantic recall played via playlist id=${hit.refId} title="${playedLoc.songTitle}"`);
+      const locs = await this.indexingManager.findSongLocationById(hit.refId);
+      // 同一首歌可能跨多个歌单（最多 5 个）：把含该曲的歌单合并成一个大队列去重，
+      // 从命中曲开始整表随机播，一次把所有相关歌单带全。
+      if (locs.length > 0) {
+        const played = await this.playMergedVectorLocs(locs, pm, hit.title);
+        if (played) {
+          songloft.log.warn(`[VoiceEngine] Semantic recall merged playlists via song id=${hit.refId} title="${played.songTitle}" playlists=${locs.length}`);
           return {
-            songId: playedLoc.songId,
-            songName: playedLoc.songTitle,
-            artist: playedLoc.artist,
-            playlistId: playedLoc.playlistId,
-            playlistName: playedLoc.playlistName,
+            songId: played.songId,
+            songName: played.songTitle,
+            artist: played.artist,
+            playlistId: played.playlistId,
+            playlistName: played.playlistName,
           };
         }
-        // playIndexedSong 内部已对 #420 做过刷新重试，到这里即为失败，继续尝试下一条命中。
-        songloft.log.warn(`[VoiceEngine] Semantic recall playlist-locate failed id=${hit.refId}, try next hit`);
-        continue;
+        songloft.log.warn(`[VoiceEngine] Semantic recall all playlists failed for song id=${hit.refId}, fallback to standalone`);
       }
 
       let song: any;
@@ -1738,6 +1737,47 @@ export class VoiceEngine {
 
     songloft.log.warn(`[VoiceEngine] 走独立歌曲路径播放（不在任何歌单，无自动续播）: "${standalone.title}" - ${standalone.artist} id=${standalone.id} type=${standalone.type}`);
     return true;
+  }
+
+  /**
+   * 向量语义召回单曲命中且跨多个歌单时的合并播：把含该曲的歌单全部取歌、按 songId 去重，
+   * 合并成一个播放队列，从命中曲开始整表随机播（forceRandom 语义）。
+   * @returns 播出的第一首歌位置；全部歌单拉取/播放失败返回 null（由调用方降级为单曲播放）。
+   */
+  private async playMergedVectorLocs(
+    locs: SongLocation[],
+    pm: PlaylistManager,
+    requestedSongName: string,
+  ): Promise<SongLocation | null> {
+    const songsById = new Map<number, any>();
+    for (const loc of locs) {
+      try {
+        const plSongs = (await songloft.playlists.getSongs(loc.playlistId, { limit: 100000 } as any)) ?? [];
+        for (const s of plSongs) {
+          if (s && typeof (s as any).id === 'number') songsById.set((s as any).id, s);
+        }
+      } catch (e) {
+        songloft.log.warn(`[VoiceEngine] merged playlist fetch failed playlistId=${loc.playlistId}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    if (songsById.size === 0) return null;
+
+    const merged = Array.from(songsById.values());
+    const startSongId = locs[0].songId;
+    let startIndex = startSongId != null ? merged.findIndex((s) => (s as any).id === startSongId) : -1;
+    if (startIndex < 0) startIndex = 0;
+
+    const ok = await pm.playWithSongs(merged, startIndex, 'random', `合并歌单: ${locs.length.toLocaleString('zh-CN')} 个`, '');
+    if (!ok) return null;
+
+    return {
+      songId: startSongId,
+      playlistId: locs[0].playlistId,
+      playlistName: locs[0].playlistName,
+      songIndex: startIndex,
+      songTitle: (merged[startIndex] as any)?.title || requestedSongName,
+      artist: (merged[startIndex] as any)?.artist || locs[0].artist,
+    };
   }
 
   private async playIndexedSong(
